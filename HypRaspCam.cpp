@@ -681,7 +681,7 @@ int applyTimeLapseUsingRaspistill(strReqImg *reqImg)
 		pipe = popen(timeLapseCommand->c_str(), "r");
 		pclose(pipe);
 	} else {
-		// Otherwise perform loop using libcamera-still per-frame
+		// Otherwise perform loop using rpicam-still per-frame
 		int i;
 		int expectedNumImgs = ceil(
 							(float)(reqImg->slide.degreeEnd - reqImg->slide.degreeIni) /
@@ -895,19 +895,19 @@ std::string *genSLIDECommand(strReqImg *reqImg)
 	//
 	//Initialize command
 	//..
-	// Prefer raspistill if available, otherwise libcamera-still
+	// Prefer raspistill if available, otherwise rpicam-still
 	std::string baseCmd = "raspistill";
 	if( access("/usr/bin/raspistill", X_OK) != 0 && access("/usr/local/bin/raspistill", X_OK) != 0 ){
-		baseCmd = "libcamera-still";
+		baseCmd = "rpicam-still";
 	}
 
 	std::string *tmpCommand = new std::string();
-	// raspistill supports -o with printf, libcamera-still may not; use raspistill when present
+	// raspistill supports -o with printf, rpicam-still may not; use raspistill when present
 	if( baseCmd == "raspistill" ){
 		tmpCommand->append("raspistill -o ./tmpTimeLapse/%d.png");
 	} else {
-		// For libcamera fallback we'll let applyTimeLapseUsingRaspistill perform a looped capture
-		tmpCommand->append("libcamera-still");
+		// For rpicam fallback we'll let applyTimeLapseUsingRaspistill perform a looped capture
+		tmpCommand->append("rpicam-still");
 	}
 	std::ostringstream numberToString;
 
@@ -932,7 +932,7 @@ std::string *genSLIDECommand(strReqImg *reqImg)
 		numberToString<<reqImg->imgRows;
 		tmpCommand->append(" -h " + numberToString.str());
 	} else {
-		// libcamera-still fallback: leave details to applyTimeLapseUsingRaspistill which will call genCommand per frame
+		// rpicam-still fallback: leave details to applyTimeLapseUsingRaspistill which will call genCommand per frame
 		tmpCommand->append(" --nopreview --quality 100");
 	}
 
@@ -991,10 +991,10 @@ std::string *genSLIDECommand(strReqImg *reqImg)
 std::string *genRaspiVideoCommand(strReqImg *reqImg)
 {
 	//Initialize command
-	// Prefer raspivid when available, otherwise libcamera-vid
+	// Prefer raspivid when available, otherwise rpicam-vid
 	std::string baseCmd = "raspivid";
 	if( access("/usr/bin/raspivid", X_OK) != 0 && access("/usr/local/bin/raspivid", X_OK) != 0 ){
-		baseCmd = "libcamera-vid";
+		baseCmd = "rpicam-vid";
 	}
 	std::string *tmpCommand = new std::string();
 	tmpCommand->append(baseCmd + " -o ");
@@ -1303,10 +1303,10 @@ std::string *genCommand(strReqImg *reqImg, const std::string& fileName)
 	
 	//Initialize command
 	//..
-	// Prefer raspistill when available, otherwise libcamera-still
+	// Prefer raspistill when available, otherwise rpicam-still
 	std::string baseCmd = "raspistill";
 	if( access("/usr/bin/raspistill", X_OK) != 0 && access("/usr/local/bin/raspistill", X_OK) != 0 ){
-		baseCmd = "libcamera-still";
+		baseCmd = "rpicam-still";
 	}
 	std::ostringstream ss;
 	std::string *tmpCommand = new std::string();
@@ -1315,7 +1315,7 @@ std::string *genCommand(strReqImg *reqImg, const std::string& fileName)
 		tmpCommand->append(fileName);
 		tmpCommand->append(" -n -q 100 -gc");
 	} else {
-		tmpCommand->append("libcamera-still -o ");
+		tmpCommand->append("rpicam-still -o ");
 		tmpCommand->append(fileName);
 		tmpCommand->append(" --nopreview --quality 100");
 	}
