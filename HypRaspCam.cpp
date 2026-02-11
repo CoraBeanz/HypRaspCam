@@ -674,11 +674,31 @@ int applyTimeLapseUsingRaspistill(strReqImg *reqImg)
 	//Generate console command
 	std::string *timeLapseCommand = genSLIDECommand(reqImg);
 	printf("Comm: %s\n",timeLapseCommand->c_str());
-			
-	//Execute command generated
-	FILE* pipe;
-	pipe = popen(timeLapseCommand->c_str(), "r");
-	pclose(pipe);
+
+	// If raspistill exists we can run the single timelapse command produced
+	if( access("/usr/bin/raspistill", X_OK) == 0 || access("/usr/local/bin/raspistill", X_OK) == 0 ){
+		FILE* pipe;
+		pipe = popen(timeLapseCommand->c_str(), "r");
+		pclose(pipe);
+	} else {
+		// Otherwise perform loop using libcamera-still per-frame
+		int i;
+		int expectedNumImgs = ceil(
+							(float)(reqImg->slide.degreeEnd - reqImg->slide.degreeIni) /
+							(float)reqImg->slide.degreeJump
+						 );
+		std::ostringstream fname;
+		for(i=1; i<=expectedNumImgs; i++){
+			fname.str(""); fname<<"./tmpTimeLapse/"<<i<<".png";
+			std::string singleFile = fname.str();
+			std::string *cmd = genCommand(reqImg, singleFile);
+			printf("Executing: %s\n", cmd->c_str());
+			FILE* pipe = popen(cmd->c_str(), "r");
+			pclose(pipe);
+			delete cmd;
+			usleep(reqImg->slide.speed * 1000); // sleep slide.speed ms between frames
+		}
+	}
 	
 	//Count imagery generated
 	int i, numImgs, expectedNumImgs;
@@ -875,26 +895,46 @@ std::string *genSLIDECommand(strReqImg *reqImg)
 	//
 	//Initialize command
 	//..
-	std::string *tmpCommand = new std::string("raspistill -o ./tmpTimeLapse/%d.png"); //5000 -tl 200");
+	// Prefer raspistill if available, otherwise libcamera-still
+	std::string baseCmd = "raspistill";
+	if( access("/usr/bin/raspistill", X_OK) != 0 && access("/usr/local/bin/raspistill", X_OK) != 0 ){
+		baseCmd = "libcamera-still";
+	}
+
+	std::string *tmpCommand = new std::string();
+	// raspistill supports -o with printf, libcamera-still may not; use raspistill when present
+	if( baseCmd == "raspistill" ){
+		tmpCommand->append("raspistill -o ./tmpTimeLapse/%d.png");
+	} else {
+		// For libcamera fallback we'll let applyTimeLapseUsingRaspistill perform a looped capture
+		tmpCommand->append("libcamera-still");
+	}
 	std::ostringstream numberToString;
-	tmpCommand->append(" -n -q 100 -gc");
-	
-	//Add lapse (speed) and duration
-	numberToString.str("");
-	int duration = 	 ceil( (float)( reqImg->slide.degreeEnd - reqImg->slide.degreeIni ) / 
-					   (float)reqImg->slide.degreeJump ) * reqImg->slide.speed;
-	numberToString << " -t " << duration << " -tl " << reqImg->slide.speed;
-	tmpCommand->append( numberToString.str() );
-	
-	//Width
-	numberToString.str("");
-	numberToString<<reqImg->imgCols;
-	tmpCommand->append(" -w " + numberToString.str());
-	
-	//Height
-	numberToString.str("");
-	numberToString<<reqImg->imgRows;
-	tmpCommand->append(" -h " + numberToString.str());
+
+	// Common options (when using raspistill these map directly)
+	if( baseCmd == "raspistill" ){
+		tmpCommand->append(" -n -q 100 -gc");
+
+		//Add lapse (speed) and duration
+		numberToString.str("");
+		int duration =      ceil( (float)( reqImg->slide.degreeEnd - reqImg->slide.degreeIni ) / 
+						   (float)reqImg->slide.degreeJump ) * reqImg->slide.speed;
+		numberToString << " -t " << duration << " -tl " << reqImg->slide.speed;
+		tmpCommand->append( numberToString.str() );
+
+		//Width
+		numberToString.str("");
+		numberToString<<reqImg->imgCols;
+		tmpCommand->append(" -w " + numberToString.str());
+
+		//Height
+		numberToString.str("");
+		numberToString<<reqImg->imgRows;
+		tmpCommand->append(" -h " + numberToString.str());
+	} else {
+		// libcamera-still fallback: leave details to applyTimeLapseUsingRaspistill which will call genCommand per frame
+		tmpCommand->append(" --nopreview --quality 100");
+	}
 
 	//Colour balance?
 	if(reqImg->raspSett.ColorBalance)
@@ -951,9 +991,14 @@ std::string *genSLIDECommand(strReqImg *reqImg)
 std::string *genRaspiVideoCommand(strReqImg *reqImg)
 {
 	//Initialize command
-	//..
-	std::string *tmpCommand = new std::string("raspivid -o ");		
-	tmpCommand->append( reqImg->video.o );		
+	// Prefer raspivid when available, otherwise libcamera-vid
+	std::string baseCmd = "raspivid";
+	if( access("/usr/bin/raspivid", X_OK) != 0 && access("/usr/local/bin/raspivid", X_OK) != 0 ){
+		baseCmd = "libcamera-vid";
+	}
+	std::string *tmpCommand = new std::string();
+	tmpCommand->append(baseCmd + " -o ");
+	tmpCommand->append( reqImg->video.o );        
 	std::ostringstream auxIntToString;
 	
 	//Add seconds
@@ -990,7 +1035,8 @@ std::string *genRaspiVideoCommand(strReqImg *reqImg)
 		//Mode indicates video size
 		auxIntToString.str("");
 		auxIntToString << reqImg->video.fps;
-		tmpCommand->append(" -fps " + auxIntToString.str());		
+		// raspivid uses -fps, libcamera-vid uses --framerate, both often accept -fps
+		tmpCommand->append(" -fps " + auxIntToString.str());        
 	}
 	
     //-b, --bitrate	: Set bitrate. Use bits per second (e.g. 10MBits/s would be -b 10000000)
@@ -1257,15 +1303,28 @@ std::string *genCommand(strReqImg *reqImg, const std::string& fileName)
 	
 	//Initialize command
 	//..
-	std::string *tmpCommand = new std::string("raspistill -o ");
+	// Prefer raspistill when available, otherwise libcamera-still
+	std::string baseCmd = "raspistill";
+	if( access("/usr/bin/raspistill", X_OK) != 0 && access("/usr/local/bin/raspistill", X_OK) != 0 ){
+		baseCmd = "libcamera-still";
+	}
 	std::ostringstream ss;
-	tmpCommand->append(fileName);
-	tmpCommand->append(" -n -q 100 -gc");
+	std::string *tmpCommand = new std::string();
+	if( baseCmd == "raspistill" ){
+		tmpCommand->append("raspistill -o ");
+		tmpCommand->append(fileName);
+		tmpCommand->append(" -n -q 100 -gc");
+	} else {
+		tmpCommand->append("libcamera-still -o ");
+		tmpCommand->append(fileName);
+		tmpCommand->append(" --nopreview --quality 100");
+	}
 	
 	//Colour balance?
-	if(reqImg->raspSett.ColorBalance)
+	if( reqImg->raspSett.ColorBalance)
 	{
-		tmpCommand->append(" -ifx colourbalance");
+		if( baseCmd == "raspistill" ) tmpCommand->append(" -ifx colourbalance");
+		else tmpCommand->append(" --imxfx colourbalance");
 	}
 	
 	//Denoise?
@@ -1277,10 +1336,11 @@ std::string *genCommand(strReqImg *reqImg, const std::string& fileName)
 	//Square Shuter speed
 	int shutSpeed = reqImg->raspSett.SquareShutterSpeed;
 	if( (reqImg->squApert && shutSpeed>0))
-	{		
+	{        
 		ss.str("");
 		ss<<shutSpeed;
-		tmpCommand->append(" -ss " + ss.str());
+		if( baseCmd == "raspistill" ) tmpCommand->append(" -ss " + ss.str());
+		else tmpCommand->append(" --shutter " + ss.str());
 	}
 	
 	//Diffraction Shuter speed
@@ -1300,30 +1360,35 @@ std::string *genCommand(strReqImg *reqImg, const std::string& fileName)
 	{
 		ss.str("");
 		ss<<(reqImg->raspSett.TriggerTime*1000);
-		tmpCommand->append(" -t " + ss.str());
+		if( baseCmd == "raspistill" ) tmpCommand->append(" -t " + ss.str());
+		else tmpCommand->append(" --timeout " + ss.str());
 	}
 	else
 	{
 		ss.str("");
 		ss<<250;//Milliseconds by default
-		tmpCommand->append(" -t " + ss.str());
-	}	
+		if( baseCmd == "raspistill" ) tmpCommand->append(" -t " + ss.str());
+		else tmpCommand->append(" --timeout " + ss.str());
+	}    
 	
 	//Width
 	ss.str("");
 	ss<<reqImg->imgCols;
-	tmpCommand->append(" -w " + ss.str());
+	if( baseCmd == "raspistill" ) tmpCommand->append(" -w " + ss.str());
+	else tmpCommand->append(" --width " + ss.str());
 	
 	//Height
 	ss.str("");
 	ss<<reqImg->imgRows;
-	tmpCommand->append(" -h " + ss.str());
+	if( baseCmd == "raspistill" ) tmpCommand->append(" -h " + ss.str());
+	else tmpCommand->append(" --height " + ss.str());
 	
 	//AWB
 	if(strcmp((char*)reqImg->raspSett.AWB, "none")!=0)
 	{
 		std::string sAWB((char*)reqImg->raspSett.AWB, sizeof(reqImg->raspSett.AWB));
-		tmpCommand->append(" -awb ");
+		if( baseCmd == "raspistill" ) tmpCommand->append(" -awb ");
+		else tmpCommand->append(" --awb ");
 		tmpCommand->append(sAWB.c_str());
 		//printf("Entro a AWB: %s\n",sAWB.c_str());
 	}
@@ -1332,7 +1397,8 @@ std::string *genCommand(strReqImg *reqImg, const std::string& fileName)
 	if(strcmp((char*)reqImg->raspSett.Exposure, "none")!=0)
 	{
 		std::string sExposure((char*)reqImg->raspSett.Exposure, sizeof(reqImg->raspSett.Exposure));
-		tmpCommand->append(" -ex ");
+		if( baseCmd == "raspistill" ) tmpCommand->append(" -ex ");
+		else tmpCommand->append(" --exposure ");
 		tmpCommand->append(sExposure.c_str());
 		//printf("Entro a Exp: %s\n",sExposure.c_str());
 	}
@@ -1342,7 +1408,8 @@ std::string *genCommand(strReqImg *reqImg, const std::string& fileName)
 	{
 		ss.str("");
 		ss<<reqImg->raspSett.ISO;
-		tmpCommand->append(" -ISO " + ss.str());
+		if( baseCmd == "raspistill" ) tmpCommand->append(" -ISO " + ss.str());
+		else tmpCommand->append(" --gain " + ss.str());
 	}
 	return tmpCommand;
 }
